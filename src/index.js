@@ -1,47 +1,3 @@
-import { DurableObject } from "cloudflare:workers";
-
-/**
- * Welcome to Cloudflare Workers! This is your first Durable Objects application.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your Durable Object in action
- * - Run `npm run deploy` to publish your application
- *
- * Learn more at https://developers.cloudflare.com/durable-objects
- */
-
-/**
- * Env provides a mechanism to reference bindings declared in wrangler.toml within JavaScript
- *
- * @typedef {Object} Env
- * @property {DurableObjectNamespace} MY_DURABLE_OBJECT - The Durable Object namespace binding
- */
-
-/** A Durable Object's behavior is defined in an exported Javascript class */
-export class MyDurableObject extends DurableObject {
-	/**
-	 * The constructor is invoked once upon creation of the Durable Object, i.e. the first call to
-	 * 	`DurableObjectStub::get` for a given identifier (no-op constructors can be omitted)
-	 *
-	 * @param {DurableObjectState} ctx - The interface for interacting with Durable Object state
-	 * @param {Env} env - The interface to reference bindings declared in wrangler.toml
-	 */
-	constructor(ctx, env) {
-		super(ctx, env);
-	}
-
-	/**
-	 * The Durable Object exposes an RPC method sayHello which will be invoked when when a Durable
-	 *  Object instance receives a request from a Worker via the same method invocation on the stub
-	 *
-	 * @param {string} name - The name provided to a Durable Object instance from a Worker
-	 * @returns {Promise<string>} The greeting to be sent back to the Worker
-	 */
-	async sayHello(name) {
-		return `Hello, ${name}!`;
-	}
-}
-
 export default {
 	/**
 	 * This is the standard fetch handler for a Cloudflare Worker
@@ -52,18 +8,97 @@ export default {
 	 * @returns {Promise<Response>} The response to be sent back to the client
 	 */
 	async fetch(request, env, ctx) {
-		// We will create a `DurableObjectId` using the pathname from the Worker request
-		// This id refers to a unique instance of our 'MyDurableObject' class above
-		let id = env.MY_DURABLE_OBJECT.idFromName(new URL(request.url).pathname);
+		if (new URL(request.url).pathname === '/quote/random') {
+			return await handleQuoteRequest(request,env,ctx);
+		}
+		// Return a 404 response for any other URL
+		return new Response('Not Found', { status: 404 });
 
-		// This stub creates a communication channel with the Durable Object instance
-		// The Durable Object constructor will be invoked upon the first call for a given id
-		let stub = env.MY_DURABLE_OBJECT.get(id);
-
-		// We call the `sayHello()` RPC method on the stub to invoke the method on the remote
-		// Durable Object instance
-		let greeting = await stub.sayHello("world");
-
-		return new Response(greeting);
 	},
 };
+
+async function handleQuoteRequest(request,env,ctx) {
+  try {
+    // Fetch the random quote from ZenQuotes API
+    const quoteResponse = await fetch('https://zenquotes.io/api/random');
+    const quoteData = await quoteResponse.json();
+	let quoteFromDb = null;
+    if (quoteData.length === 0) {
+	  console.error('No quote found', quoteResponse);
+      return new Response('No quote found', { status: 404 });
+    }
+	let rateLimited = false;
+	if (quoteData[0].q == "Too many requests. Obtain an auth key for unlimited access."){
+		console.log("hit rate limit on https://zenquotes.io/api/random");
+		quoteFromDb = await fetchRandomQuoteFromDatabase(env);
+		rateLimited=true;
+	}
+
+    // Extract the quote data
+    const quote =rateLimited? quoteFromDb[0].q: quoteData[0].q;
+    const author = rateLimited? quoteFromDb[0].a : quoteData[0].a;
+    const htmlQuote = rateLimited? quoteFromDb[0].h : quoteData[0].h;
+
+    // Store the quote in the D1 database
+	if (!rateLimited){
+		await storeQuoteInDatabase(env, quote, author, htmlQuote);
+	}
+
+    // Return the quote in response
+    return new Response(JSON.stringify({quote:quote, author:author, htmlQuote: htmlQuote}), {
+		headers: {
+			'Content-Type': 'application/json',
+			'Access-Control-Allow-Origin': '*',  // Allow all domains
+			'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',  // Allow these HTTP methods
+			'Access-Control-Allow-Headers': 'Content-Type'  // Allow Content-Type header
+		  }
+    });
+  } catch (error) {
+    console.error('Error fetching or storing quote:', error);
+    return new Response('Internal Server Error', { status: 500 });
+  }
+}
+
+// Function to fetch a random quote from the D1 database
+async function fetchRandomQuoteFromDatabase(env) {
+	const query = `SELECT quote, author, html_quote FROM quotes ORDER BY RANDOM() LIMIT 1`;
+
+	// Prepare and execute the query
+	const result = await env.DB.prepare(query).first();
+	if (!result) {
+	  throw new Error('No quote found in the database');
+	}
+
+	return [{
+	  q: result.quote,
+	  a: result.author,
+	  h: result.html_quote
+	}];
+  }
+
+// Function to check if the quote already exists in the D1 database
+async function isQuoteDuplicate(env, quote) {
+	const query = `
+		SELECT COUNT(*) as count
+		FROM quotes
+		WHERE quote = ?
+	`;
+	const stmt = env.DB.prepare(query);
+	const result = await stmt.bind(quote).run();
+	return result.count > 0;
+}
+
+// Modify the storeQuoteInDatabase function to check for duplicates
+async function storeQuoteInDatabase(env, quote, author, htmlQuote) {
+	if (await isQuoteDuplicate(env, quote)) {
+		console.log('Duplicate quote found, not storing in database.');
+		return;
+	}
+
+	const query = `
+		INSERT INTO quotes (quote, author, html_quote, lang, url)
+		VALUES (?, ?, ?, 'en', 'https://zenquotes.io/api/random')
+	`;
+	const stmt = env.DB.prepare(query);
+	await stmt.bind(quote, author, htmlQuote).run();
+}

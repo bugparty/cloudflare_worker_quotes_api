@@ -1,0 +1,11 @@
+config:
+  target: 'https://quotes.0xff.workers.dev'
+  phases:
+    - duration: 200    # 持续 60 秒
+      arrivalRate: 50  # 每秒请求 10 次
+
+
+scenarios:
+  - flow:
+      - get:
+          url: "/quote/random"

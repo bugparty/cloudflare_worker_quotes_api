@@ -19,8 +19,11 @@ export default {
 
 async function handleQuoteRequest(request,env,ctx) {
   try {
+	const startFetch = performance.now()
     // Fetch the random quote from ZenQuotes API
     const quoteResponse = await fetch('https://zenquotes.io/api/random');
+	const endFetch = performance.now()
+
     const quoteData = await quoteResponse.json();
 	let quoteFromDb = null;
     if (quoteData.length === 0) {
@@ -28,11 +31,13 @@ async function handleQuoteRequest(request,env,ctx) {
       return new Response('No quote found', { status: 404 });
     }
 	let rateLimited = false;
+	const startFetchDb = performance.now()
 	if (quoteData[0].q == "Too many requests. Obtain an auth key for unlimited access."){
 		console.log("hit rate limit on https://zenquotes.io/api/random");
 		quoteFromDb = await fetchRandomQuoteFromDatabase(env);
 		rateLimited=true;
 	}
+	const endFetchDb = performance.now()
 
     // Extract the quote data
     const quote =rateLimited? quoteFromDb[0].q: quoteData[0].q;
@@ -40,9 +45,12 @@ async function handleQuoteRequest(request,env,ctx) {
     const htmlQuote = rateLimited? quoteFromDb[0].h : quoteData[0].h;
 
     // Store the quote in the D1 database
+	const startStoreDb = performance.now()
 	if (!rateLimited){
 		await storeQuoteInDatabase(env, quote, author, htmlQuote);
 	}
+	const endStoreDb = performance.now()
+	console.log(`fetch time: ${(endFetch-startFetch).toFixed(2)}ms, fetch db time: ${(endFetchDb-startFetchDb).toFixed(2)}ms, store db time: ${(endStoreDb-startStoreDb).toFixed(2)}ms`)
 
     // Return the quote in response
     return new Response(JSON.stringify({quote:quote, author:author, htmlQuote: htmlQuote}), {

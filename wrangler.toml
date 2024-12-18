@@ -1,7 +1,8 @@
 #:schema node_modules/wrangler/config-schema.json
 name = "quotes"
-main = "src/index.js"
-compatibility_date = "2024-12-16"
+main = "src/index.ts"
+compatibility_date = "2024-12-18"
+compatibility_flags = ["nodejs_compat"]
 
 # Workers Logs
 # Docs: https://developers.cloudflare.com/workers/observability/logs/workers-logs/

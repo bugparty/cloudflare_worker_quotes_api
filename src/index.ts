@@ -7,7 +7,7 @@ export default {
 	 * @param {ExecutionContext} ctx - The execution context of the Worker
 	 * @returns {Promise<Response>} The response to be sent back to the client
 	 */
-	async fetch(request, env, ctx) {
+	async fetch(request, env, ctx):Promise<Response>  {
 		const url  = new URL(request.url);
 		if (url.pathname === '/quote/random') {
 			return await handleQuoteRequest(request,env,ctx);
@@ -20,9 +20,14 @@ export default {
 		return new Response('Not Found', { status: 404 });
 
 	},
-};
-
-async function handleQuoteRequestFromDb(request,env,ctx) {
+}satisfies ExportedHandler<Env>;;
+interface ZenQuote{
+	q: string;
+	a: string;
+	h: string;
+}
+async function handleQuoteRequestFromDb(request:Request,
+	env:Env,ctx:ExecutionContext):Promise<Response> {
 	try {
 
 		let quoteFromDb = null;
@@ -52,18 +57,18 @@ async function handleQuoteRequestFromDb(request,env,ctx) {
 		return new Response('Internal Server Error', { status: 500 });
 	  }
 }
-async function handleBatch(request,env,ctx){
+async function handleBatch(request: Request, env: Env, ctx: ExecutionContext):Promise<Response> {
 
 	try {
 		// Fetch the random quote from ZenQuotes API
 		const quoteResponse = await fetch('https://zenquotes.io/api/quotes');
-		const quoteData = await quoteResponse.json();
+		const quoteData: { q: string, a: string, h: string }[] = await quoteResponse.json();
 		//console.log(`quotes length: ${quoteData.length}`)
 		if (quoteData.length === 1) {
 			console.error('rate limited', quoteData);
 			return new Response('No quote found', { status: 404 });
 		}
-		let params = [];
+		let params:string[] = [];
 		quoteData.forEach((quote) => {
 			params.push(quote.q, quote.a, quote.h, 'en', 'https://zenquotes.io/api/quotes');
 		});
@@ -82,7 +87,7 @@ async function handleBatch(request,env,ctx){
 			const stmt = env.DB.prepare(query);
 			const params_slice_begin = i*100;
 			const params_slice_end = Math.min((i+1)*100, quoteData.length*5);
-			let params_slice = params.slice(params_slice_begin,params_slice_end);
+			let params_slice: string[] = params.slice(params_slice_begin, params_slice_end);
 			//console.log(`params_slice_range: ${params_slice_begin} - ${params_slice_end}`)
 			const status = await stmt.bind(...params_slice).run();
 			//console.log(`status ${JSON.stringify(status)}`)
@@ -106,15 +111,15 @@ async function handleBatch(request,env,ctx){
 	}
 }
 
-async function handleQuoteRequest(request,env,ctx) {
+async function handleQuoteRequest(request: Request, env: Env, ctx: ExecutionContext):Promise<Response> {
   try {
 	const startFetch = performance.now()
     // Fetch the random quote from ZenQuotes API
     const quoteResponse = await fetch('https://zenquotes.io/api/random');
 	const endFetch = performance.now()
 
-    const quoteData = await quoteResponse.json();
-	let quoteFromDb = null;
+    const quoteData:ZenQuote[] = await quoteResponse.json();
+	let quoteFromDb :ZenQuote[] = [];
     if (quoteData.length === 0) {
 	  console.error('No quote found', quoteResponse);
       return new Response('No quote found', { status: 404 });
@@ -157,7 +162,7 @@ async function handleQuoteRequest(request,env,ctx) {
 }
 
 // Function to fetch a random quote from the D1 database
-async function fetchRandomQuoteFromDatabase(env) {
+async function fetchRandomQuoteFromDatabase(env: Env):Promise<ZenQuote[]>  {
 	const query = `SELECT quote, author, html_quote FROM quotes ORDER BY RANDOM() LIMIT 1`;
 
 	// Prepare and execute the query
@@ -167,27 +172,26 @@ async function fetchRandomQuoteFromDatabase(env) {
 	}
 
 	return [{
-	  q: result.quote,
-	  a: result.author,
-	  h: result.html_quote
+	  q: result.quote as string,
+	  a: result.author as string,
+	  h: result.html_quote as string
 	}];
   }
 
 // Function to check if the quote already exists in the D1 database
-async function isQuoteDuplicate(env, quote) {
+async function isQuoteDuplicate(env:Env, quote:ZenQuote) {
 	const query = `
 		SELECT COUNT(*) as count
 		FROM quotes
 		WHERE quote = ?
 	`;
 	const stmt = env.DB.prepare(query);
-	const result = await stmt.bind(quote).run();
-	return result.count > 0;
+	const result = await stmt.bind(quote).first();
+	return result != null;
 }
 
 // Modify the storeQuoteInDatabase function to check for duplicates
-async function storeQuoteInDatabase(env, quote, author, htmlQuote) {
-
+async function storeQuoteInDatabase(env:Env, quote:string, author:string, htmlQuote:string) {
 	const query = `
 		INSERT INTO quotes (quote, author, html_quote, lang, url)
 		VALUES (?, ?, ?, 'en', 'https://zenquotes.io/api/random')

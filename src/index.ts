@@ -1,64 +1,57 @@
-export default {
-	/**
-	 * This is the standard fetch handler for a Cloudflare Worker
-	 *
-	 * @param {Request} request - The request submitted to the Worker from the client
-	 * @param {Env} env - The interface to reference bindings declared in wrangler.toml
-	 * @param {ExecutionContext} ctx - The execution context of the Worker
-	 * @returns {Promise<Response>} The response to be sent back to the client
-	 */
-	async fetch(request, env, ctx):Promise<Response>  {
-		const url  = new URL(request.url);
-		if (url.pathname === '/quote/random') {
-			return await handleQuoteRequest(request,env,ctx);
-		}else if(url.pathname === '/quote/test'){
-			return await handleQuoteRequestFromDb(request,env,ctx);
-		}else if(url.pathname === '/quote/test2'){
-			return await handleBatch(request,env,ctx);
-		}
-		// Return a 404 response for any other URL
-		return new Response('Not Found', { status: 404 });
+import { Hono } from "hono";
+// This ensures c.env.DB is correctly typed
+type Bindings = {
+	DB: D1Database;
+  };
 
-	},
-}satisfies ExportedHandler<Env>;;
+const app = new Hono<{ Bindings: Bindings }>();
+
 interface ZenQuote{
 	q: string;
 	a: string;
 	h: string;
 }
-async function handleQuoteRequestFromDb(request:Request,
-	env:Env,ctx:ExecutionContext):Promise<Response> {
+// Function to fetch a random quote from the D1 database
+async function fetchRandomQuoteFromDatabase(env: Env):Promise<ZenQuote[]>  {
+	const query = `SELECT quote, author, html_quote FROM quotes ORDER BY RANDOM() LIMIT 1`;
+
+	// Prepare and execute the query
+	const result = await env.DB.prepare(query).first();
+	if (!result) {
+	  throw new Error('No quote found in the database');
+	}
+
+	return [{
+	  q: result.quote as string,
+	  a: result.author as string,
+	  h: result.html_quote as string
+	}];
+  }
+
+app.get("/quote/test", async (c) => {
 	try {
-
 		let quoteFromDb = null;
-
 		const startFetchDb = performance.now()
-		quoteFromDb = await fetchRandomQuoteFromDatabase(env);
+		quoteFromDb = await fetchRandomQuoteFromDatabase(c.env);
 		const endFetchDb = performance.now()
 
 		// Extract the quote data
 		const quote = quoteFromDb[0].q ;
 		const author =  quoteFromDb[0].a ;
 		const htmlQuote = quoteFromDb[0].h;
-
-		console.log(`fetch db time: ${(endFetchDb-startFetchDb).toFixed(2)}ms`)
-
-		// Return the quote in response
-		return new Response(JSON.stringify({quote:quote, author:author, htmlQuote: htmlQuote}), {
-			headers: {
-				'Content-Type': 'application/json',
-				'Access-Control-Allow-Origin': '*',  // Allow all domains
-				'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',  // Allow these HTTP methods
-				'Access-Control-Allow-Headers': 'Content-Type'  // Allow Content-Type header
-			  }
-		});
+		c.header('Content-Type', 'application/json');
+		c.header('Access-Control-Allow-Origin', '*');  // Allow all domains
+		c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');  // Allow these HTTP methods
+		c.header('Access-Control-Allow-Headers', 'Content-Type');  // Allow Content-Type header
+		return c.json({quote:quote, author:author, htmlQuote: htmlQuote});
+		console.log(`fetch db time: ${(endFetchDb-startFetchDb).toFixed(2)}ms`);
 	  } catch (error) {
 		console.error('Error fetching or storing quote:', error);
-		return new Response('Internal Server Error', { status: 500 });
+		return c.html('Internal Server Error', { status: 500 });
 	  }
-}
-async function handleBatch(request: Request, env: Env, ctx: ExecutionContext):Promise<Response> {
+});
 
+app.get("/quote/test2", async (c) => {
 	try {
 		// Fetch the random quote from ZenQuotes API
 		const quoteResponse = await fetch('https://zenquotes.io/api/quotes');
@@ -84,7 +77,7 @@ async function handleBatch(request: Request, env: Env, ctx: ExecutionContext):Pr
 
 			const query = 'INSERT INTO quotes (quote, author, html_quote, lang, url) VALUES '+values_q+' ON CONFLICT(quote) DO NOTHING;';
 			//console.log(`query: ${query}`)
-			const stmt = env.DB.prepare(query);
+			const stmt = c.env.DB.prepare(query);
 			const params_slice_begin = i*100;
 			const params_slice_end = Math.min((i+1)*100, quoteData.length*5);
 			let params_slice: string[] = params.slice(params_slice_begin, params_slice_end);
@@ -96,22 +89,19 @@ async function handleBatch(request: Request, env: Env, ctx: ExecutionContext):Pr
 
 		console.log(`store db time: ${(endStoreDb-startStoreDb).toFixed(2)}ms`)
 		// Return the quote in response
+		c.header('Content-Type', 'application/json');
+		c.header('Access-Control-Allow-Origin', '*');  // Allow all domains
+		c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');  // Allow these HTTP methods
+		c.header('Access-Control-Allow-Headers', 'Content-Type');  // Allow Content-Type header
+		return c.json({quoteData});
 
-		return new Response(JSON.stringify(quoteData), {
-			headers: {
-				'Content-Type': 'application/json',
-				'Access-Control-Allow-Origin': '*',  // Allow all domains
-				'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',  // Allow these HTTP methods
-				'Access-Control-Allow-Headers': 'Content-Type'  // Allow Content-Type header
-			  }
-		});
 	}catch(error){
 		console.error('Error fetching or storing quote:', error);
-		return new Response('Internal Server Error', { status: 500 });
+		return c.html('Internal Server Error', { status: 500 });
 	}
-}
+});
 
-async function handleQuoteRequest(request: Request, env: Env, ctx: ExecutionContext):Promise<Response> {
+app.get("/quote/random", async (c) => {
   try {
 	const startFetch = performance.now()
     // Fetch the random quote from ZenQuotes API
@@ -128,7 +118,7 @@ async function handleQuoteRequest(request: Request, env: Env, ctx: ExecutionCont
 	const startFetchDb = performance.now()
 	if (quoteData[0].q == "Too many requests. Obtain an auth key for unlimited access."){
 		console.log("hit rate limit on https://zenquotes.io/api/random");
-		quoteFromDb = await fetchRandomQuoteFromDatabase(env);
+		quoteFromDb = await fetchRandomQuoteFromDatabase(c.env);
 		rateLimited=true;
 	}
 	const endFetchDb = performance.now()
@@ -141,42 +131,21 @@ async function handleQuoteRequest(request: Request, env: Env, ctx: ExecutionCont
     // Store the quote in the D1 database
 	const startStoreDb = performance.now()
 	if (!rateLimited){
-		await storeQuoteInDatabase(env, quote, author, htmlQuote);
+		await storeQuoteInDatabase(c.env, quote, author, htmlQuote);
 	}
 	const endStoreDb = performance.now()
 	console.log(`fetch time: ${(endFetch-startFetch).toFixed(2)}ms, fetch db time: ${(endFetchDb-startFetchDb).toFixed(2)}ms, store db time: ${(endStoreDb-startStoreDb).toFixed(2)}ms`)
-
-    // Return the quote in response
-    return new Response(JSON.stringify({quote:quote, author:author, htmlQuote: htmlQuote}), {
-		headers: {
-			'Content-Type': 'application/json',
-			'Access-Control-Allow-Origin': '*',  // Allow all domains
-			'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',  // Allow these HTTP methods
-			'Access-Control-Allow-Headers': 'Content-Type'  // Allow Content-Type header
-		  }
-    });
+	c.header('Content-Type', 'application/json');
+		c.header('Access-Control-Allow-Origin', '*');  // Allow all domains
+		c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');  // Allow these HTTP methods
+		c.header('Access-Control-Allow-Headers', 'Content-Type');  // Allow Content-Type header
+	return c.json({quote:quote, author:author, htmlQuote: htmlQuote});
   } catch (error) {
     console.error('Error fetching or storing quote:', error);
-    return new Response('Internal Server Error', { status: 500 });
+	return c.html('Internal Server Error', { status: 500 });
   }
-}
+});
 
-// Function to fetch a random quote from the D1 database
-async function fetchRandomQuoteFromDatabase(env: Env):Promise<ZenQuote[]>  {
-	const query = `SELECT quote, author, html_quote FROM quotes ORDER BY RANDOM() LIMIT 1`;
-
-	// Prepare and execute the query
-	const result = await env.DB.prepare(query).first();
-	if (!result) {
-	  throw new Error('No quote found in the database');
-	}
-
-	return [{
-	  q: result.quote as string,
-	  a: result.author as string,
-	  h: result.html_quote as string
-	}];
-  }
 
 // Function to check if the quote already exists in the D1 database
 async function isQuoteDuplicate(env:Env, quote:ZenQuote) {
@@ -200,3 +169,7 @@ async function storeQuoteInDatabase(env:Env, quote:string, author:string, htmlQu
 	const stmt = env.DB.prepare(query);
 	await stmt.bind(quote, author, htmlQuote).run();
 }
+
+// Export our Hono app: Hono automatically exports a
+// Workers 'fetch' handler for you
+export default app;

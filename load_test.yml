@@ -8,4 +8,4 @@ config:
 scenarios:
   - flow:
       - get:
-          url: "/quote/random"
+          url: "/quote/test2"

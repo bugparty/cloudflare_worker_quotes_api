@@ -1,4 +1,7 @@
 import { Hono } from "hono";
+import { PrismaClient } from '@prisma/client'
+import { PrismaD1 } from '@prisma/adapter-d1'
+import { quotes } from "@prisma/client";
 // This ensures c.env.DB is correctly typed
 type Bindings = {
 	DB: D1Database;
@@ -27,14 +30,28 @@ async function fetchRandomQuoteFromDatabase(env: Env):Promise<ZenQuote[]>  {
 	  h: result.html_quote as string
 	}];
   }
+async function fetchRandomQuoteFromDatabaseOrm(env: Env):Promise<ZenQuote[]>  {
+	const adapter = new PrismaD1(env.DB)
+    const prisma = new PrismaClient({ adapter })
+	const result = await prisma.$queryRaw<quotes[]>`SELECT quote, author, html_quote FROM quotes ORDER BY RANDOM() LIMIT 1`;
 
+	if (!result) {
+	  throw new Error('No quote found in the database');
+	}
+
+	return [{
+	  q: result[0].quote as string,
+	  a: result[0].author as string,
+	  h: result[0].html_quote as string
+	}];
+  }
 app.get("/quote/test", async (c) => {
 	try {
 		let quoteFromDb = null;
 		const startFetchDb = performance.now()
-		quoteFromDb = await fetchRandomQuoteFromDatabase(c.env);
+		quoteFromDb = await fetchRandomQuoteFromDatabaseOrm(c.env);
 		const endFetchDb = performance.now()
-
+		console.log(`fetch db time: ${(endFetchDb-startFetchDb).toFixed(2)}ms`);
 		// Extract the quote data
 		const quote = quoteFromDb[0].q ;
 		const author =  quoteFromDb[0].a ;
@@ -44,7 +61,7 @@ app.get("/quote/test", async (c) => {
 		c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');  // Allow these HTTP methods
 		c.header('Access-Control-Allow-Headers', 'Content-Type');  // Allow Content-Type header
 		return c.json({quote:quote, author:author, htmlQuote: htmlQuote});
-		console.log(`fetch db time: ${(endFetchDb-startFetchDb).toFixed(2)}ms`);
+
 	  } catch (error) {
 		console.error('Error fetching or storing quote:', error);
 		return c.html('Internal Server Error', { status: 500 });

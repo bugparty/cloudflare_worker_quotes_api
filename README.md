@@ -7,7 +7,7 @@ A fast and lightweight quote API built using [Cloudflare Workers](https://develo
 You can fetch a random quote with the following endpoint:
 
 ```
-GET https://de4bfdb7-quotes.0xff.workers.dev/quote/random
+GET https://quotes.0xff.workers.dev/quote/random
 ```
 
 Returns:
